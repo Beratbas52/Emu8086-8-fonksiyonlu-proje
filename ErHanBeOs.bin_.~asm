@@ -1,0 +1,854 @@
+name "kernel"   
+#make_bin#;saf makine kodu olarak derlenecek
+#load_segment=0800# ;kod segment degeri 0800h olacak
+#load_offset=0000# ; Instruction pointer degeri ise 0000h olacak
+#al=0b#;
+#ah=00#;
+#bh=00#;
+#bl=00#;
+#ch=00#;
+#cl=02#;
+#dh=00#;
+#dl=00#;
+#ds=0800# ;Data segmentin ayarlanmasi
+#es=0800# ;Ekstra segmentin ayarlanmasi
+#si=7c02# ;Kaynak indisin ayarlanmasi
+#di=0000# ;Hedef indisin ayarlanmasi
+#bp=0000# ;Taban isaretcisinin ayarlanmasi
+#cs=0800# ;Kod segmentin ayarlanmasi
+#ip=0000# ;Komut isaretcisinin ayarlanmasi
+#ss=07c0# ;Yigin segmentin ayarlanmasi
+#sp=03fe# ;yigin isaretcisi ayarlanmasi
+
+
+
+; Mevcut konuma karakteri yazar:
+karakter_yaz    macro   char
+        push    ax
+        mov     al, char
+        mov     ah, 0eh
+        int     10h     
+        pop     ax
+endm
+
+
+; mevcut konumu ayarlar:   ;
+konum_belirle macro   sutun,satir
+        push    ax
+        push    bx
+        push    dx
+        mov     ah, 02h
+        mov     dh, sutun
+        mov     dl, satir
+        mov     bh, 0
+        int     10h
+        pop     dx
+        pop     bx
+        pop     ax
+endm
+
+; x ve y konumuna metin metnini renk ozelligi ile yazar 
+yazdir macro sutun, satir, renk, metin
+LOCAL   metin_baslangici, veriyi_atla, metin_sonu
+    pusha
+    mov dx, cs
+    mov es, dx
+    mov ah, 13h
+    mov al, 1
+    mov bh, 0
+    mov bl, renk
+    mov cx, offset metin_sonu - offset metin_baslangici
+    mov dl, sutun
+    mov dh, satir
+    mov bp, offset metin_baslangici
+    int 10h
+    popa
+    jmp veriyi_atla
+    metin_baslangici DB metin
+    metin_sonu DB 0
+    veriyi_atla:   
+endm
+
+org 0000h ;mikro_loader ile 0800:0000 adresine yuklenen mikro_kernel icin baslangic noktasi
+jmp kod_baslangici ; Veri kismini atla
+
+;==== Veri Bolumu =====================
+
+; Karsilama Mesaji:
+mesaj  db "Mikro i",9fh,"letim sistemine ho",9fh,"geldiniz!",0Dh,0Ah 
+       db "",0Dh,0Ah
+       db "Komutlari gormek icin 'yardim'komutunu giriniz!",0Dh,0Ah,0 
+       
+komut_boyutu        equ 10 
+komut_tamponu  db komut_boyutu dup("b")
+tezmizleme_metni       db komut_boyutu dup(" "), 0
+terminal          db ">", 0
+
+; Komutlar :
+kyardim    db "yardim", 0
+kyardim_bitis:
+ktemizle     db "temizle", 0
+ktemizle_bitis:
+kcikis    db "cikis", 0
+kcikis_bitis:  
+ksayioyunu db "sayioyunu",0
+ksayioyunu_bitis: 
+krenkliyaz db "renkliyaz",0
+krenkliyaz_bitis: 
+kgulme     db "gulenyuz",0
+kgulme_bitis:
+ksonsuzyaz     db "sonsuzyaz",0
+ksonsuzyaz_bitis:
+kalfabe      db "alfabe",0
+kalfabe_bitis:
+
+
+
+yardim_msj   db "Mikro i",9fh,"letim sistemini se",87h,"tiginiz i",87h,"in  te",9fh,"ekk",81h,"rler!", 0Dh,0Ah
+             db "Desteklenen Komut Listesi:", 0Dh,0Ah
+             db "yardim   - Bu listeyi yazd",8Dh,"r",8Dh,"r.", 0Dh,0Ah
+             db "temizle    - Ekran",8Dh," temizler.", 0Dh,0Ah
+             db "cikis   - Sistemden cikis yapar.", 0Dh,0Ah
+             db "sayioyunu - Sayi oyununu acar ",0Dh,0Ah
+             db "renkliyaz -Renkli harf yazdirir",0Dh,0Ah
+             db "gulenyuz - Gulen yuz emojisi cikar", 0Dh,0Ah
+             db "sonsuzyaz - Ekranda sonsuz erhan yazar", 0Dh,0Ah
+             db "alfabe - harfleri alfabe sirasina gore renkli acar",0Dh,0Ah,0
+             
+
+bilinmeyen  db "Bilinmeyen Komut " , 0    
+
+;=============Segment ve Ekran Ayarlari=========================
+
+kod_baslangici:
+ 
+push    cs
+pop     ds  ; data segment ayarlama
+mov     ax, 03h ; metin modu 80x25
+int     10h
+mov     ax, 1003h
+mov     bx, 0      ; ekran ayarlamalari
+int     10h 
+call    ekrani_temizle    
+lea     si, mesaj
+call    metin_yaz
+
+
+sonsuz_dongu:
+call    komutu_al
+call    komutu_isle
+jmp sonsuz_dongu
+
+
+;=======Klavyeden komut girilmesi icin arayuz===================================  
+
+komutu_al proc near
+    mov     ax, 40h
+    mov     es, ax
+    mov     al, es:[84h]
+    konum_belirle  20,1 ; imleci ekranin en altina yerlestir.
+    lea     si, tezmizleme_metni ;komut satirini temizle
+    call    metin_yaz
+    konum_belirle  20,1
+    lea     si, terminal;komut metnini goster  
+    call    metin_yaz
+    mov     dx, komut_boyutu  ;   
+    lea     di, komut_tamponu ; yeni komut yazilmasini bekle
+    call    metni_al          ;
+    ret
+    
+komutu_al endp
+;===========================================
+;=== komut isleme kontrolu ====
+komutu_isle proc    near
+    push    ds
+    pop     es
+    cld 
+
+;yardim komutu kontrolu
+    lea     si, komut_tamponu
+    mov     cx, kyardim_bitis - offset kyardim   ;yardim komutunun metin uzunlugu
+    lea     di, kyardim
+    repe    cmpsb ;yardim komutu ise yardim komutuna git
+    je      yardim_komutu 
+;Sayioyunu komutu kontrolu    
+    lea     si, komut_tamponu
+    mov     cx, ksayioyunu_bitis - offset ksayioyunu  ;yardim komutunun metin uzunlugu
+    lea     di, ksayioyunu
+    repe    cmpsb ;yardim komutu ise yardim komutuna git
+    je      sayioyunu_komutu
+
+;temizle komutu kontrolu
+    lea     si, komut_tamponu
+    mov     cx, ktemizle_bitis - offset ktemizle  
+    lea     di, ktemizle
+    repe    cmpsb
+    jne     ktemizle_degil
+    jmp     ekrani_temizle_komutu
+    ktemizle_degil:
+
+; cikis komutu kontrolu
+    lea     si, komut_tamponu
+    mov     cx, kcikis_bitis - offset kcikis 
+    lea     di, kcikis
+    repe    cmpsb
+    je      cikis_komutu  
+    
+    
+    
+;   renkli yazdirma komutu  
+    lea     si, komut_tamponu
+    mov     cx, krenkliyaz_bitis - offset krenkliyaz 
+    lea     di, krenkliyaz
+    repe    cmpsb
+    je      renkliyazdir_komutu                     
+
+; gulme komutu
+    lea     si, komut_tamponu
+    mov     cx, kgulme_bitis - offset kgulme 
+    lea     di, kgulme
+    repe    cmpsb
+    je      gulme_komutu 
+    
+    
+; sonsuzyazi komutu  
+    lea     si, komut_tamponu
+    mov     cx, ksonsuzyaz_bitis - offset ksonsuzyaz
+    lea     di, ksonsuzyaz
+    repe    cmpsb
+    je      sonsuzyaz_komutu
+    
+; alfabe komutu
+    lea     si, komut_tamponu
+    mov     cx, kalfabe_bitis - offset kalfabe
+    lea     di, kalfabe
+    repe    cmpsb
+    je      alfabe_komutu
+    
+     
+                             
+                                
+    
+  
+
+
+
+;Bos satir kontrolu    
+    cmp     komut_tamponu, 0 ; bos satirsa es gec
+    jz      islendi
+
+
+;==================== ============
+
+;===== KOMUTLAR ================
+;+++++++++Bilinmeyen Komut++++++++++++++++++++
+
+mov     al, 1
+call    metni_kaydir
+mov     ax, 40h
+mov     es, ax
+mov     al, es:[84h]
+dec     al
+konum_belirle  0, al
+lea     si, bilinmeyen
+call    metin_yaz
+lea     si, komut_tamponu
+call    metin_yaz
+mov     al, 1
+call    metni_kaydir
+jmp     islendi
+; +++++++++++++++++++++++++++++++++++
+
+; +++++ 'yardim'komutu ++++++
+yardim_komutu:
+mov     al, 9;ekrani 9 satir kaydir
+call    metni_kaydir
+mov     ax, 40h
+mov     es, ax
+mov     al, es:[84h]
+sub     al, 9 ;yardim mesaji yazdirmak icin satir: 9
+konum_belirle  0, al
+lea     si, yardim_msj
+call    metin_yaz
+mov     al, 1
+call    metni_kaydir
+jmp     islendi
+; +++++ 'ekrani temizle' ++++++
+ekrani_temizle_komutu:
+call    ekrani_temizle
+jmp     islendi
+;++++++++++++++++++++++++++++++++   
+
+;++++sayioyun komutu++++++
+sayioyunu_komutu:
+call rastgele
+jmp islendi
+
+;++++++++++++++++++++++++++  
+
+;++++++cikis komutu+++++
+cikis_komutu:
+call    ekrani_temizle
+mov ax, 0 
+int 16h
+
+mov     ax, 0040h
+mov     ds, ax
+mov     w.[0072h], 0000h 
+jmp	0ffffh:0000h	           
+                         
+                           
+;+++++++++gulme komutu+++++++++++++++ 
+gulme_komutu:
+
+mov ax, 0
+mov es, ax
+
+mov ax, es:[40h]
+mov word_offset, ax
+
+mov ax, es:[40h+2]
+mov word_segment, ax
+
+mov ah,0eh ; int 10h için parametreleri ayarlama
+mov al, 1  ; gulen yuzun ASCII kodu.
+
+pushf
+push cs
+mov bx, rr
+push bx
+
+opcode       db 0EAh   
+word_offset  dw ?
+word_segment dw ?
+
+rr:
+mov ax, 1  ; buraya don
+
+ret
+
+   
+;++++++++++++++++++++++++++++++++++++++++
+;+++++++sonsuz yazi yazdiran komut+++++++ 
+
+sonsuzyaz_komutu:
+mov bx, 0 ; toplam adim sayacc.
+
+mov cx, 5 ; dongu adim sayisi
+
+         k1: add bx, 1
+         mov al, '-'
+         mov ah, 0eh
+         int 10h
+         push cx
+         
+         
+         mov cx, 5
+         k2: add bx, 1
+         mov al, 'E'
+         mov ah, 0eh
+         int 10h
+         push cx
+         mov cx, 5
+         
+          k3: add bx, 1
+         mov al, 'R'
+         mov ah, 0eh
+         int 10h
+         push cx
+         mov cx, 5
+          k4: add bx, 1
+         mov al, 'H'
+         mov ah, 0eh
+         int 10h
+         push cx
+         mov cx, 5
+          k5: add bx, 1
+         mov al, 'A'
+         mov ah, 0eh
+         int 10h
+         push cx
+         mov cx, 5
+         
+           k6: add bx, 1
+         mov al, 'N'
+         mov ah, 0eh
+         int 10h
+         push cx
+         mov cx, 5
+         
+            k7: add bx, 1
+         mov al, '-'
+         mov ah, 0eh
+         int 10h
+         push cx
+         mov cx, 5
+         
+          loop k1 ; harici dongu.
+         pop cx
+          loop k2 ; ic dongu.
+         pop cx
+         loop k3 ; ic ice dongu.
+         pop cx
+        
+          loop k4 ; harici dongu.
+          pop cx
+           loop k5 ; harici dongu.
+           pop cx    
+             loop k6 ; harici dongu.
+           pop cx    
+            loop k7 ; harici dongu.
+           pop cx
+        
+ ret  
+ 
+ 
+ ;+++++++++++++++++++++++++++++++++++++++++  
+
+ 
+alfabe_komutu: 
+;video modunu ayarlayin:
+;metin modu 80x25, 16 renk, 8 sayfa
+mov     ah, 0
+mov     al, 3
+int     10h
+
+; ======== karakterleri farkli sayfalara yazdir:
+
+mov al, '0' ; yazdirilacak karakter.
+mov bh, 0 ; sayfa numarasi.
+mov bl, 0000_1110b  ; nitelikler
+
+do_print:
+
+mov cx, 200         ; yazilacak karakter sayisi.
+mov ah, 09h         ; char fonksiyonunu yaz.
+int 10h
+
+inc al  
+inc bh  
+
+rol bl, 1  ; baska bir ozellik secin.
+
+cmp al, '4'
+jb  do_print
+
+
+; ===== sayfalari dogrudan yazarak degistirin
+; video bellegine:
+
+push    ds
+
+mov ax, 0b800h
+mov ds, ax
+
+; ilk bayt bir renk ozelligidir
+; (0f2h = beyaz arka plan, yesil karakter),
+; ikinci bayt bir ascii kodudur
+; (41h = 'a', 42h = 'b', 43h = 'c'...) 
+
+mov di, 0           ; sayfa 0.
+mov w.[di], 0f241h
+
+add di, 4096        ; sayfa 1.
+mov w.[di], 0f242h
+
+add di, 4096        ; sayfa 2.
+mov w.[di], 0f243h
+
+add di, 4096        ; sayfa 3.
+mov w.[di], 0f244h
+
+pop ds
+
+; ======= sayfalari birbiri ardina goster:
+
+mov  al, 0   ; sayfa numarasi
+
+show_next_page:
+
+mov  ah, 05h ; sayfa fonksiyonunu degistir
+int  10h
+
+push ax
+; herhangi bir anahtari bekleyin:
+xor  ax, ax
+int  16h
+pop  ax
+
+inc  al
+
+cmp  al, 4
+jb   show_next_page
+
+
+
+
+ret    
+
+
+
+
+;++++++++++++++++++++++++++++++++++++++++++++++++++++  
+renkliyazdir_komutu:
+    
+        mov     ax, 3
+        int     10h
+        
+        mov     ax, 1003h
+        mov     bx, 0      ; yanip sonmeyi devre disi birakin.
+        int     10h
+        
+        
+                       
+        mov     dl, 0   ; gecerli sutun.
+        mov     dh, 0   ; gecerli satir.
+        
+        mov     bl, 0   ;mevcut ozellikler
+        
+        jmp     next_char
+        
+        next_row:
+        inc     dh
+        cmp     dh, 16
+        je      stop_print
+        mov     dl, 0
+        
+        next_char:
+        
+        
+        mov     ah, 02h
+        int     10h
+        
+        mov     al, 'x'
+        mov     bh, 0
+        mov     cx, 1
+        mov     ah, 09h
+        int     10h
+        
+        inc     bl      
+        
+        inc     dl
+        cmp     dl, 16
+        je      next_row
+        jmp     next_char
+        
+        stop_print:
+        
+        
+        mov     dl, 10  
+        mov     dh, 5   
+        mov     ah, 02h
+        int     10h
+        
+        ; teletip çciktisinin testi,
+        ; renk niteliklerini kullanir,
+        ;gecerli imlec konumunda:
+        mov     al, 'x'
+        mov     ah, 0eh
+        int     10h
+        
+        
+        ; herhangi bir tusa basilmasini bekleyin:
+        mov ah, 0
+        int 16h
+        
+        
+        ret                                    
+         
+
+                      
+islendi:
+ret
+komutu_isle endp 
+        
+;=== son satir haric diger satirlardaki metni kaydirma
+metni_kaydir   proc    near
+
+    mov dx, 40h
+    mov es, dx  ; ekran parametrelerini almak icin.
+    mov ah, 06h ; yukari kaydirma fonksiyonu parametresi.
+    mov bh, 07  ; yeni satirlarin renk bilgisi.
+    mov ch, 0   ; ust satir.
+    mov cl, 0   ; ust sutun.
+    mov di, 84h ; ekrandaki satirlar,
+    mov dh, es:[di] ; alt satir.
+    dec dh  ; son satiri kaydirma.
+    mov di, 4ah ; ekrandaki sutunlar,
+    mov dl, es:[di]
+    dec dl  ; alt sutun.
+    int 10h
+    ret
+metni_kaydir   endp
+
+;===========================================
+
+
+
+
+;====Klavyeden girilen metni al
+metni_al      proc    near
+push    ax;
+push    cx;
+push    di;
+push    dx; yazmaclari yedekle
+
+mov     cx, 0                   ; karakter sayaci
+cmp     dx, 1                   ; tampon kucuk mu?
+jbe     bos_tampon              ;
+dec     dx                      ; tampondan 1 cikar sondaki 0 karakteri icin
+
+klavye_bekle:
+mov     ah, 0                   ; basilan tusu oku
+int     16h
+cmp     al, 0Dh                 ; 'return' tusu mu ?
+jz      klavyecikis
+cmp     al, 8                   ; 'backspace' tusu mu?
+jne     tampona_ekle
+jcxz    klavye_bekle             ; silecek birsey yok
+dec     cx
+dec     di
+karakter_yaz    8                       ; backspace isle
+karakter_yaz    ' '                     ; konumu temizle
+karakter_yaz    8                       ; tekrar backspace
+jmp     klavye_bekle
+
+tampona_ekle:
+
+        cmp     cx, dx          ; tampon dolu mu?
+        jae     klavye_bekle    ; evet ise backspace veya enter tusu bekle
+        mov     [di], al
+        inc     di
+        inc     cx
+        mov     ah, 0eh         ; basilan tusu yazdir
+        int     10h
+jmp     klavye_bekle
+;============================
+
+klavyecikis:
+mov     [di], 0 ; icerigi sifirla
+bos_tampon:
+pop     dx ; yazmaclari geri yukle
+pop     di
+pop     cx
+pop     ax
+ret
+metni_al      endp
+
+
+
+;==== Mevcut konuma metin yazdir ===== 
+
+;Metin baslangici: ds:si
+metin_yaz proc near
+push    ax      ; yazmaclari yedekle
+push    si      ;
+sonraki_karakter:      
+        mov     al, [si]
+        cmp     al, 0
+        jz      yazma_bitti
+        inc     si
+        mov     ah, 0eh ; ekrana karakter yaz.
+        int     10h
+        jmp     sonraki_karakter
+yazma_bitti:
+
+pop     si      ; yazmaclari geri yuke...
+pop     ax      ;
+
+ret
+metin_yaz endp
+
+
+
+;===ekrani kaydirarak temizleme =====
+ekrani_temizle proc near
+        push    ax      ; yazmaclari yedekle
+        push    ds      ;
+        push    bx      ;
+        push    cx      ;
+        push    di      ;
+        mov     ax, 40h
+        mov     ds, ax  ; ekran parametreleri icin
+        mov     ah, 06h ; yukari kaydirma ayari
+        mov     al, 0   ; butun satirlari kaydir
+        mov     bh, 0000_1010b  ; renk: siyah ustune yesil karakter
+        mov     ch, 0   ; ust satir.
+        mov     cl, 0   ; ust sutun.
+        mov     di, 84h ; ekrandaki satirlar,
+        mov     dh, [di] ; alt satir.
+        mov     di, 4ah ; ekrandaki sutunlar,
+        mov     dl, [di]
+        dec     dl      ; alt sutun.
+        int     10h
+        mov     bh, 0   ; imlecin yerini.
+        mov     dl, 0   ; Sutun degeri.
+        mov     dh, 0   ; Satir degeri.
+        mov     ah, 02  ; kullanarak
+        int     10h     ; ilk karaktere getir
+        pop     di      ; yazmaclari geri yukle
+        pop     cx      ;
+        pop     bx      ;
+        pop     ds      ;
+        pop     ax      ;
+
+        ret
+ekrani_temizle endp 
+                                                               
+                                        
+sayioyunu proc near
+    call ekrani_temizle
+    mov cx,100
+    basadon:  
+    mov ah, 00h
+    int 16h 
+    karakter_yaz al
+    loop basadon
+    call ekrani_temizle 
+
+	               
+	ret
+sayioyunu endp 
+
+
+buyuk_karakter_yaz proc near 
+call ekrani_temizle
+yazdir 0,0,0ah,"karakterleri giriniz:"
+mov si,0
+mov cx,10
+d1:
+mov ah,0
+int 16h
+karakter_yaz al
+mov [buyuk_karakter+si],al
+inc si
+loop d1
+call ekrani_temizle
+lea bx, buyuk_karakter
+mov si,0   
+mov cx,10
+d2:
+mov ah,[bx+si]
+and [bx+si],11011111b
+inc si
+loop d2
+mov si,0
+mov cx,10
+d3:   
+karakter_yaz [buyuk_karakter+si]
+inc si 
+loop d3
+
+ret    
+buyuk_karakter_yaz endp
+
+buyuk_karakter db 10 dup(?)  
+
+
+kucuk_karakter_yaz proc near 
+call ekrani_temizle
+yazdir 0,0,0ah,"karakterleri giriniz:" 
+c1:
+mov si,0
+mov cx,10
+mov ah,0
+int 16h
+karakter_yaz al
+mov [kucuk_karakter+si],al
+inc si
+loop c1
+call ekrani_temizle
+lea bx, kucuk_karakter
+mov si,0   
+mov cx,10
+c2:
+mov ah,[bx+si]
+or [bx+si],00100000b
+inc si
+loop c2
+mov si,0
+mov cx,10 
+c3:   
+karakter_yaz [kucuk_karakter+si]
+inc si 
+loop c3
+
+ret    
+kucuk_karakter_yaz endp
+
+kucuk_karakter db 10 dup(?)     
+
+rastgele proc near
+mov di,0
+call ekrani_temizle
+
+jmp rand_sayi_uret
+dvm1:
+
+jmp sifir_dokuz
+dvm2:
+tekrar:
+mov ah,00
+int 16H
+karakter_yaz al
+cmp di,6
+cmp dl,al
+jz dogru
+jl kucukse
+jg buyukse
+
+;call yanlis
+jmp tekrar
+
+kucukse:
+lea si,bsayi
+call metin_yaz
+inc di
+jmp tekrar
+
+buyukse:
+lea si,ksayi
+call metin_yaz
+inc di
+jmp tekrar 
+
+dogru:
+lea si,dogru1
+call metin_yaz
+call ekrani_temizle
+jmp sonlandir
+
+
+rand_sayi_uret:
+
+mov ah,00h
+int 1Ah ;cx:dx sistem zamani okundu
+jmp dvm1
+
+
+sifir_dokuz:
+   
+mov ax,dx
+xor dx,dx
+mov cx,10
+div cx   ;  dxax/cx ; ax bolum,  dx kalan 
+
+add dl, '0'
+mov randomNumb,dx  
+jmp dvm2
+
+
+
+bitir1:
+lea si,hak
+call metin_yaz
+jmp sonlandir
+sonlandir:
+ret
+rastgele endp  
+randomNumb dw 0
+dogru1 db "Tebrikler",0
+bsayi db "sayi buyuk sayiyi kucult",0
+ksayi db "sayi kucuk sayiyi buyut",0
+hata  db "Yanlis Tahmin",0 
+hak db "Bilemediniz Hakk",8Dh,"n",8Dh,"z Bitti",0
