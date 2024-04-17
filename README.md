@@ -2,6 +2,7 @@
 Proje emu8086 üzerinde çalışabilecek bir temel işletim sistemi oluşturmak.
 
 Projedeki komutlar ve amaçları:
+
 1.Yardım:Yardım komutu içinde bulunan komutları ve açıklamarı bulundurur. 
 
 2.Temizle:EKranı temizler.
